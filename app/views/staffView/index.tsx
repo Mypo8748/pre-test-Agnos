@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-
-const CHANNEL_NAME = "patient-updates";
+import { getSocket } from "@/app/lib/socket-client";
 
 type SubmissionRecord = Record<string, string> & {
   submittedAt?: string;
@@ -15,22 +14,23 @@ const formatPatientName = (data: Record<string, string>) => {
 };
 
 const StaffView = () => {
+  const socket = getSocket();
   const [latestData, setLatestData] = useState<Record<string, string> | null>(
     null,
   );
   const [submissions, setSubmissions] = useState<SubmissionRecord[]>([]);
   const [status, setStatus] = useState<
-    "Filling" | "Inactive" | "Submitted" | "Cancelled"
-  >("Inactive");
+    "Filling" | "In-active" | "Submitted" | "Cancelled"
+  >("In-active");
   const [selectedSubmission, setSelectedSubmission] =
     useState<SubmissionRecord | null>(null);
 
   useEffect(() => {
-    const handleMessage = (event: Event) => {
-      const messageEvent = event as MessageEvent;
-      const storageEvent = event as StorageEvent;
-      const raw = "data" in event ? messageEvent.data : storageEvent.newValue;
+    if (!socket.connected) {
+      socket.connect();
+    }
 
+    const handleSocketMessage = (raw: unknown) => {
       if (typeof raw !== "string") {
         return;
       }
@@ -44,47 +44,33 @@ const StaffView = () => {
         if (payload?.type === "patient-filling") {
           setLatestData(payload.data ?? null);
           setStatus("Filling");
-          console.log("Received filling data:", payload.data);
         } else if (payload?.type === "patient-inactive") {
           setLatestData(payload.data ?? null);
-          setStatus("Inactive");
-          console.log("Received inactive data:", payload.data);
+          setStatus("In-active");
         } else if (payload?.type === "patient-submitted") {
           const submittedRecord: SubmissionRecord = {
             ...(payload.data ?? {}),
             submittedAt: new Date().toLocaleString("en-GB"),
           };
 
-          setLatestData(submittedRecord);
+          setLatestData(null);
           setSubmissions((prev) => [submittedRecord, ...prev]);
           setStatus("Submitted");
-          console.log("Received submitted data:", submittedRecord);
         } else if (payload?.type === "patient-cancelled") {
           setLatestData(null);
           setStatus("Cancelled");
-          console.log("Received cancelled data");
         }
       } catch (error) {
-        console.error("Failed to parse incoming message", error);
+        console.error("error", error);
       }
     };
 
-    if (typeof BroadcastChannel !== "undefined") {
-      const channel = new BroadcastChannel(CHANNEL_NAME);
-      channel.addEventListener("message", handleMessage as EventListener);
-
-      return () => {
-        channel.removeEventListener("message", handleMessage as EventListener);
-        channel.close();
-      };
-    }
-
-    window.addEventListener("storage", handleMessage as EventListener);
+    socket.on("patient-update", handleSocketMessage);
 
     return () => {
-      window.removeEventListener("storage", handleMessage as EventListener);
+      socket.off("patient-update", handleSocketMessage);
     };
-  }, []);
+  }, [socket]);
 
   return (
     <div className="container py-4 py-md-5">
@@ -123,7 +109,11 @@ const StaffView = () => {
                 </div>
               </div>
             ) : (
-              <div className="text-muted mb-4">No submission received yet.</div>
+              <div className="text-muted mb-4">
+                {status === "Submitted"
+                  ? "No active patient data is displayed after submission."
+                  : "No submission received yet."}
+              </div>
             )}
 
             <div className="mt-3">

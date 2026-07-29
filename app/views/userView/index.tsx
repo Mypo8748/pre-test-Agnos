@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-
-const CHANNEL_NAME = "patient-updates";
+import { getSocket } from "@/app/lib/socket-client";
 
 const UserView = () => {
+  const socket = getSocket();
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [formData, setFormData] = useState({
     firstName: "",
@@ -20,6 +20,7 @@ const UserView = () => {
     emergencyContact: "",
     religion: "",
   });
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   const publishUpdate = (data: typeof formData, type: string) => {
     const payload = JSON.stringify({
@@ -28,16 +29,84 @@ const UserView = () => {
       timestamp: Date.now(),
     });
 
-    localStorage.setItem(CHANNEL_NAME, payload);
+    if (!socket.connected) {
+      socket.connect();
+    }
 
-    if (typeof BroadcastChannel !== "undefined") {
-      const channel = new BroadcastChannel(CHANNEL_NAME);
-      channel.postMessage(payload);
-      channel.close();
+    socket.emit("patient-update", payload);
+  };
+
+  const validateField = (name: string, value: string) => {
+    switch (name) {
+      case "firstName":
+      case "lastName":
+      case "phoneNumber":
+      case "email":
+      case "address":
+      case "gender":
+        if (!value.trim()) {
+          return `${name} is required`;
+        }
+        break;
+      default:
+        break;
+    }
+
+    if (
+      name === "email" &&
+      value &&
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+    ) {
+      return "Please enter a valid email";
+    }
+
+    if (
+      name === "phoneNumber" &&
+      value &&
+      !/^[0-9]{9,15}$/.test(value.replace(/\D/g, ""))
+    ) {
+      return "Please enter a valid phone number";
+    }
+
+    return "";
+  };
+
+  const clearIdleTimer = () => {
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
     }
   };
 
+  const validateForm = () => {
+    const nextErrors: Record<string, string> = {};
+
+    (Object.keys(formData) as Array<keyof typeof formData>).forEach((key) => {
+      const value = formData[key];
+      if (
+        [
+          "firstName",
+          "lastName",
+          "phoneNumber",
+          "email",
+          "address",
+          "gender",
+        ].includes(key)
+      ) {
+        const message = validateField(key, value);
+        if (message) {
+          nextErrors[key] = message;
+        }
+      }
+    });
+
+    setErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  };
+
   const handleCancel = () => {
+    clearIdleTimer();
+
     const emptyData = {
       firstName: "",
       middleName: "",
@@ -54,32 +123,67 @@ const UserView = () => {
     };
 
     setFormData(emptyData);
+    setErrors({});
     publishUpdate(emptyData, "patient-cancelled");
   };
 
   useEffect(() => {
+    if (!socket.connected) {
+      socket.connect();
+    }
+
     return () => {
-      if (idleTimerRef.current) {
-        clearTimeout(idleTimerRef.current);
-      }
+      clearIdleTimer();
     };
-  }, []);
+  }, [socket]);
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>,
   ) => {
     const { name, value } = e.target;
+
+    if (name === "phoneNumber") {
+      const numericValue = value.replace(/\D/g, "");
+      if (numericValue.length > 15) {
+        return;
+      }
+
+      setFormData((prevData) => {
+        const nextData = {
+          ...prevData,
+          [name]: numericValue,
+        };
+
+        if (errors[name]) {
+          setErrors((prev) => ({ ...prev, [name]: "" }));
+        }
+
+        publishUpdate(nextData, "patient-filling");
+
+        clearIdleTimer();
+
+        idleTimerRef.current = setTimeout(() => {
+          publishUpdate(nextData, "patient-inactive");
+        }, 1500);
+
+        return nextData;
+      });
+      return;
+    }
+
     setFormData((prevData) => {
       const nextData = {
         ...prevData,
         [name]: value,
       };
 
+      if (errors[name]) {
+        setErrors((prev) => ({ ...prev, [name]: "" }));
+      }
+
       publishUpdate(nextData, "patient-filling");
 
-      if (idleTimerRef.current) {
-        clearTimeout(idleTimerRef.current);
-      }
+      clearIdleTimer();
 
       idleTimerRef.current = setTimeout(() => {
         publishUpdate(nextData, "patient-inactive");
@@ -91,6 +195,12 @@ const UserView = () => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!validateForm()) {
+      return;
+    }
+
+    clearIdleTimer();
     publishUpdate(formData, "patient-submitted");
     const emptyData = {
       firstName: "",
@@ -107,7 +217,20 @@ const UserView = () => {
       religion: "",
     };
     setFormData(emptyData);
-    console.log("Sent form data", formData);
+    setErrors({});
+  };
+
+  const handleKeyDown = (
+    e: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>,
+  ) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      e.currentTarget.blur();
+      const form = e.currentTarget.form;
+      if (form) {
+        form.requestSubmit();
+      }
+    }
   };
 
   return (
@@ -116,20 +239,28 @@ const UserView = () => {
         <div className="card shadow-lg border-0 rounded-4">
           <div className="card-body p-4">
             <div className="d-flex justify-content-center">
-              <h2 className="mb-4 ">Patient Registration Form</h2>{" "}
+              <h2 className="mb-4 ">Registration Form</h2>{" "}
             </div>
 
             <form onSubmit={handleSubmit}>
               <div className="row">
                 <div className="col-md-4 mb-3">
-                  <label className="form-label">First Name</label>
+                  <label className="form-label">
+                    First Name <span className="text-danger">*</span>
+                  </label>
                   <input
                     type="text"
-                    className="form-control form-control-sm border border-primary rounded"
+                    className={`form-control form-control-sm border rounded ${errors.firstName ? "border-danger" : "border-primary"}`}
                     value={formData.firstName}
                     onChange={handleChange}
+                    onKeyDown={handleKeyDown}
                     name="firstName"
                   />
+                  {errors.firstName && (
+                    <div className="text-danger small mt-1">
+                      {errors.firstName}
+                    </div>
+                  )}
                 </div>
 
                 <div className="col-md-4 mb-3">
@@ -139,19 +270,28 @@ const UserView = () => {
                     className="form-control form-control-sm border border-primary rounded"
                     value={formData.middleName}
                     onChange={handleChange}
+                    onKeyDown={handleKeyDown}
                     name="middleName"
                   />
                 </div>
 
                 <div className="col-md-4 mb-3">
-                  <label className="form-label">Last Name</label>
+                  <label className="form-label">
+                    Last Name <span className="text-danger">*</span>
+                  </label>
                   <input
                     type="text"
-                    className="form-control form-control-sm border border-primary rounded"
+                    className={`form-control form-control-sm border rounded ${errors.lastName ? "border-danger" : "border-primary"}`}
                     value={formData.lastName}
                     onChange={handleChange}
+                    onKeyDown={handleKeyDown}
                     name="lastName"
                   />
+                  {errors.lastName && (
+                    <div className="text-danger small mt-1">
+                      {errors.lastName}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -163,17 +303,21 @@ const UserView = () => {
                     className="form-control form-control-smborder border-primary rounded"
                     value={formData.dateOfBirth}
                     onChange={handleChange}
+                    onKeyDown={handleKeyDown}
                     name="dateOfBirth"
                   />
                 </div>
                 <div className="col-md-4 mb-3">
-                  <label className="form-label">Gender</label>
+                  <label className="form-label">
+                    Gender <span className="text-danger">*</span>
+                  </label>
                   <select
-                    className="form-select border border-primary"
+                    className={`form-select border ${errors.gender ? "border-danger" : "border-primary"}`}
                     id="gender"
                     name="gender"
                     value={formData.gender}
                     onChange={handleChange}
+                    onKeyDown={handleKeyDown}
                   >
                     <option value="">Select Gender</option>
                     <option value="male">Male</option>
@@ -182,36 +326,62 @@ const UserView = () => {
                   </select>
                 </div>
                 <div className="col-md-4 mb-3">
-                  <label className="form-label">Phone Number</label>
+                  <label className="form-label">
+                    Phone Number <span className="text-danger">*</span>
+                  </label>
                   <input
-                    className="form-control border-primary rounded"
+                    className={`form-control rounded ${
+                      errors.phoneNumber ? "border-danger" : "border-primary"
+                    }`}
                     type="tel"
+                    inputMode="numeric"
+                    maxLength={10}
                     value={formData.phoneNumber}
                     onChange={handleChange}
+                    onKeyDown={handleKeyDown}
                     name="phoneNumber"
                   />
+                  {errors.phoneNumber && (
+                    <div className="text-danger small mt-1">
+                      {errors.phoneNumber}
+                    </div>
+                  )}
                 </div>
 
                 <div className="col-md-4 mb-3">
-                  <label className="form-label">Email</label>
+                  <label className="form-label">
+                    Email <span className="text-danger">*</span>
+                  </label>
                   <input
-                    className="form-control border-primary rounded"
+                    className={`form-control rounded ${errors.email ? "border-danger" : "border-primary"}`}
                     type="email"
                     value={formData.email}
                     onChange={handleChange}
+                    onKeyDown={handleKeyDown}
                     name="email"
                   />
+                  {errors.email && (
+                    <div className="text-danger small mt-1">{errors.email}</div>
+                  )}
                 </div>
 
                 <div className="col-md-4 mb-3">
-                  <label className="form-label">Address</label>
+                  <label className="form-label">
+                    Address <span className="text-danger">*</span>
+                  </label>
                   <input
-                    className="form-control border-primary rounded"
+                    className={`form-control rounded ${errors.address ? "border-danger" : "border-primary"}`}
                     type="text"
                     value={formData.address}
                     onChange={handleChange}
+                    onKeyDown={handleKeyDown}
                     name="address"
                   />
+                  {errors.address && (
+                    <div className="text-danger small mt-1">
+                      {errors.address}
+                    </div>
+                  )}
                 </div>
 
                 <div className="col-md-4 mb-3">
@@ -221,6 +391,7 @@ const UserView = () => {
                     type="text"
                     value={formData.preferredLanguage}
                     onChange={handleChange}
+                    onKeyDown={handleKeyDown}
                     name="preferredLanguage"
                   />
                 </div>
@@ -232,6 +403,7 @@ const UserView = () => {
                     type="text"
                     value={formData.nationality}
                     onChange={handleChange}
+                    onKeyDown={handleKeyDown}
                     name="nationality"
                   />
                 </div>
@@ -243,6 +415,7 @@ const UserView = () => {
                     type="text"
                     value={formData.emergencyContact}
                     onChange={handleChange}
+                    onKeyDown={handleKeyDown}
                     name="emergencyContact"
                   />
                 </div>
@@ -254,6 +427,7 @@ const UserView = () => {
                     type="text"
                     value={formData.religion}
                     onChange={handleChange}
+                    onKeyDown={handleKeyDown}
                     name="religion"
                   />
                 </div>
@@ -264,7 +438,7 @@ const UserView = () => {
                   className="btn btn-secondary mt-3 me-2 "
                   onClick={handleCancel}
                 >
-                  Cancel
+                  Clear
                 </button>
                 <button type="submit" className="btn btn-primary mt-3">
                   Submit

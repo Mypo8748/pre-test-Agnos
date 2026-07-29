@@ -1,5 +1,5 @@
-import UserView from "./views/userView";
+import HomeView from "./views/home";
 
 export default function Home() {
-  return <UserView />;
+  return <HomeView />;
 }

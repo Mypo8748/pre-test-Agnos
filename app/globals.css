@@ -1,16 +1,11 @@
 @import "tailwindcss";
+@import "bootstrap-icons/font/bootstrap-icons.css";
+
+:root {
+  --bs-body-font-family: var(--font-anuphan), "Inter", Arial, sans-serif;
+}
 
 body {
-  font-size: 12px;
-  font-family: "Inter", arial, sans-serif;
-}
-
-
-.h2 {
-  font-size: 16px
-}
-
-.form-label {
   font-size: 14px;
+  font-family: var(--bs-body-font-family);
 }
-
