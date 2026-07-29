@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getSocket } from "@/app/lib/socket-client";
+import { getPusherClient } from "@/app/lib/pusher-client";
 
 type SubmissionRecord = Record<string, string> & {
   submittedAt?: string;
@@ -14,7 +14,7 @@ const formatPatientName = (data: Record<string, string>) => {
 };
 
 const StaffView = () => {
-  const socket = getSocket();
+  const pusher = getPusherClient();
   const [latestData, setLatestData] = useState<Record<string, string> | null>(
     null,
   );
@@ -26,17 +26,11 @@ const StaffView = () => {
     useState<SubmissionRecord | null>(null);
 
   useEffect(() => {
-    if (!socket.connected) {
-      socket.connect();
-    }
+    const channel = pusher.subscribe("patient-channel");
 
-    const handleSocketMessage = (raw: unknown) => {
-      if (typeof raw !== "string") {
-        return;
-      }
-
+    channel.bind("patient-update", (raw: unknown) => {
       try {
-        const payload = JSON.parse(raw) as {
+        const payload = raw as {
           type?: string;
           data?: Record<string, string>;
         };
@@ -63,14 +57,13 @@ const StaffView = () => {
       } catch (error) {
         console.error("error", error);
       }
-    };
-
-    socket.on("patient-update", handleSocketMessage);
+    });
 
     return () => {
-      socket.off("patient-update", handleSocketMessage);
+      channel.unbind_all();
+      pusher.unsubscribe("patient-channel");
     };
-  }, [socket]);
+  }, [pusher]);
 
   return (
     <div className="container py-4 py-md-5">

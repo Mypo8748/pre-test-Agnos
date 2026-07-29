@@ -1,10 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getSocket } from "@/app/lib/socket-client";
 
 const UserView = () => {
-  const socket = getSocket();
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [formData, setFormData] = useState({
     firstName: "",
@@ -21,19 +19,26 @@ const UserView = () => {
     religion: "",
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitMessage, setSubmitMessage] = useState<string>("");
 
-  const publishUpdate = (data: typeof formData, type: string) => {
-    const payload = JSON.stringify({
+  const publishUpdate = async (data: typeof formData, type: string) => {
+    const payload = {
       type,
       data,
       timestamp: Date.now(),
-    });
+    };
 
-    if (!socket.connected) {
-      socket.connect();
+    try {
+      await fetch("/api/patient-update", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (error) {
+      console.error("Failed to publish update", error);
     }
-
-    socket.emit("patient-update", payload);
   };
 
   const validateField = (name: string, value: string) => {
@@ -124,18 +129,15 @@ const UserView = () => {
 
     setFormData(emptyData);
     setErrors({});
+    setSubmitMessage("");
     publishUpdate(emptyData, "patient-cancelled");
   };
 
   useEffect(() => {
-    if (!socket.connected) {
-      socket.connect();
-    }
-
     return () => {
       clearIdleTimer();
     };
-  }, [socket]);
+  }, []);
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>,
@@ -158,6 +160,7 @@ const UserView = () => {
           setErrors((prev) => ({ ...prev, [name]: "" }));
         }
 
+        setSubmitMessage("");
         publishUpdate(nextData, "patient-filling");
 
         clearIdleTimer();
@@ -181,6 +184,7 @@ const UserView = () => {
         setErrors((prev) => ({ ...prev, [name]: "" }));
       }
 
+      setSubmitMessage("");
       publishUpdate(nextData, "patient-filling");
 
       clearIdleTimer();
@@ -216,8 +220,10 @@ const UserView = () => {
       emergencyContact: "",
       religion: "",
     };
+    
     setFormData(emptyData);
     setErrors({});
+    setSubmitMessage("Registration submitted successfully.");
   };
 
   const handleKeyDown = (
@@ -241,6 +247,12 @@ const UserView = () => {
             <div className="d-flex justify-content-center">
               <h2 className="mb-4 ">Registration Form</h2>{" "}
             </div>
+
+            {submitMessage && (
+              <div className="alert alert-success py-2 mb-3" role="alert">
+                {submitMessage}
+              </div>
+            )}
 
             <form onSubmit={handleSubmit}>
               <div className="row">
